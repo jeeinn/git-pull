@@ -151,6 +151,14 @@ process_git_repo() {
             log "WARN" "4. 如果是权限问题，检查你的 SSH 密钥或用户名密码是否正确。"
             log "WARN" "5. 尝试手动拉取：git fetch，然后使用 git merge 合并分支。"
 
+            if [ -n "$stash_ref" ]; then
+                log "WARN" ""
+                log "WARN" "检测到已保存的 stash，有可恢复内容"
+                log "WARN" "   - 查看：git stash list"
+                log "WARN" "   - 查看差异：git diff $stash_ref"
+                log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
+            fi
+
             git checkout "$original_branch"
             cd "$original_dir" || return 1  # 确保回到原始目录
             return 1
