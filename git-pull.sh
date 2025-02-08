@@ -206,6 +206,28 @@ process_git_repo() {
     return 0
 }
 
+# 检查系统命令是否存在
+# 检查命令是否存在
+check_commands() {
+    local command_list=($1)
+    local commands_not_found=""
+
+    # 遍历命令列表
+    for command in "${command_list[@]}"; do
+        # 检查命令是否可用
+        if ! type -t "$command" > /dev/null; then
+            # 如果命令不可用，记录下来
+            commands_not_found+="$command "
+        fi
+    done
+
+    # 如果有命令不存在，输出错误信息并退出
+    if [ -n "$commands_not_found" ]; then
+        log "ERROR" "以下命令未安装或不可用: ${commands_not_found}"
+        exit 1
+    fi
+}
+
 # 主逻辑
 main() {
     local input_dir=$1
@@ -213,7 +235,11 @@ main() {
     # 如果输入目录不为空，则将其转换为绝对路径
     [ -n "$input_dir" ] && target_dir=$(readlink -f "$input_dir")
 
+    # 检查所需命令是否存在
+    check_commands "awk date find git grep readlink"
+
     if is_git_repo "$target_dir"; then
+        log "SUCCESS" "开始处理当前目录..."
         process_git_repo "$target_dir"
     else
         log "SUCCESS" "开始扫描一级子目录..."
