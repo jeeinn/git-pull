@@ -28,12 +28,18 @@ log() {
 # 检查 git 仓库
 is_git_repo() {
     local repo_path=$1
-    cd "$repo_path" || {
+    # 尝试进入目录，如果失败则记录错误并返回 1
+    if ! cd "$repo_path" 2>/dev/null; then
         log "ERROR" "目录访问失败: $repo_path"
         return 1
-    }
-    git rev-parse --is-inside-work-tree &>/dev/null
-    return $?
+    fi
+    # 检查是否在 git 工作树内，将标准输出和标准错误输出都重定向到 /dev/null
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        cd - >/dev/null  # 回到原来的目录
+        return 1
+    fi
+    cd - >/dev/null  # 回到原来的目录
+    return 0
 }
 
 # 获取本地分支
@@ -49,6 +55,7 @@ rollback() {
         log "ERROR" "回滚操作失败！请手动处理"
         return 1
     fi
+    return 0
 }
 
 # 处理 git 仓库
@@ -56,28 +63,30 @@ process_git_repo() {
     local repo_path=$1
     local original_dir=$(pwd)
 
-    # cd "$repo_path" || {
-    #     log "ERROR" "目录访问失败: $repo_path"
-    #     return 1
-    # }
-
+    # 检查是否为 git 仓库
     if ! is_git_repo "$repo_path"; then
         log "WARN" "非 git 项目: $repo_path"
-        cd "$original_dir" || return 1  # 确保回到原始目录
         return 0
     fi
 
     log "INFO" "处理仓库: $(basename "$repo_path")"
+    cd "$repo_path" || {
+        log "ERROR" "目录访问失败: $repo_path"
+        return 1
+    }
+
     local original_branch=$(git symbolic-ref --short HEAD)
     local branches=()
+    # 使用 mapfile 读取本地分支到数组中
     mapfile -t branches < <(get_local_branches)
 
     for branch in "${branches[@]}"; do
         log "INFO" "处理分支: $branch"
-        git checkout "$branch" || {
+        # 切换分支，如果失败则记录错误并继续处理下一个分支
+        if ! git checkout "$branch"; then
             log "ERROR" "分支切换失败: $branch"
             continue
-        }
+        fi
 
         local current_commit=$(git rev-parse HEAD)
         local stash_name="auto-stash-${branch}-$(date +%s)"
@@ -89,10 +98,10 @@ process_git_repo() {
 
             # 创建并存储 stash
             local stash_hash=$(git stash create --include-untracked "$stash_name")
-            [ -z "$stash_hash" ] && {
+            if [ -z "$stash_hash" ]; then
                 log "ERROR" "stash 创建失败，跳过分支处理"
                 continue
-            }
+            fi
 
             if ! git stash store -m "$stash_name" "$stash_hash"; then
                 log "ERROR" "stash 存储失败，跳过分支处理"
@@ -101,10 +110,10 @@ process_git_repo() {
 
             # 获取存储的 stash 引用
             stash_ref=$(git stash list | grep -m1 ": ${stash_name}" | awk -F': ' '{print $1}')
-            [ -z "$stash_ref" ] && {
+            if [ -z "$stash_ref" ]; then
                 log "ERROR" "无法定位 stash 引用，跳过清理操作"
                 continue
-            }
+            fi
 
             # 安全重置工作区
             if ! git reset --hard HEAD; then
@@ -126,7 +135,6 @@ process_git_repo() {
                 return 1
             fi
             git checkout "$original_branch"
-            log "WARN" "请手动处理冲突: $repo_path"
             cd "$original_dir" || return 1  # 确保回到原始目录
             return 1
         fi
@@ -161,6 +169,7 @@ process_git_repo() {
 main() {
     local input_dir=$1
     local target_dir="."
+    # 如果输入目录不为空，则将其转换为绝对路径
     [ -n "$input_dir" ] && target_dir=$(readlink -f "$input_dir")
 
     if is_git_repo "$target_dir"; then
@@ -168,6 +177,7 @@ main() {
     else
         log "INFO" "扫描子目录..."
         find "$target_dir" -maxdepth 1 -type d | while read -r subdir; do
+            # 跳过目标目录本身
             [ "$subdir" = "$target_dir" ] && continue
             process_git_repo "$subdir"
         done
