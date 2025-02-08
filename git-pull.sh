@@ -13,7 +13,7 @@ log() {
     local message=$2
     local color
     local ts
-    ts=$(date +"%Y-%m-%d %H:%M:%S.%3N")
+    ts=$(date +"%Y-%m-%d %H:%M:%S")
 
     case $level in
         "INFO")    color=$COLOR_INFO ;;
