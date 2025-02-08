@@ -28,17 +28,27 @@ log() {
 # 检查是否为 git 仓库
 is_git_repo() {
     local repo_path=$1
-    # 尝试进入目录，如果失败则记录错误并返回 1
-    if ! cd "$repo_path" 2>/dev/null; then
+    local original_dir=$(pwd)
+
+    # 验证路径是否存在且为目录
+    if [[ ! -d "$repo_path" ]]; then
         log "ERROR" "目录访问失败: $repo_path"
         return 1
     fi
-    # 检查是否在 git 工作树内，将标准输出和标准错误输出都重定向到 /dev/null
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        cd - >/dev/null  # 回到原来的目录
+
+    # 尝试进入目录，如果失败则记录错误并返回 1
+    if ! cd "$repo_path"; then
+        log "ERROR" "无法进入目录: $repo_path"
         return 1
     fi
-    cd - >/dev/null  # 回到原来的目录
+
+    # 检查是否在 git 工作树内，将标准输出和标准错误输出都重定向到 /dev/null
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        cd "$original_dir" >/dev/null
+        return 1
+    fi
+
+    cd "$original_dir" >/dev/null
     return 0
 }
 
@@ -65,7 +75,7 @@ process_git_repo() {
 
     # 检查是否为 git 仓库
     if ! is_git_repo "$repo_path"; then
-        log "WARN" "非 git 项目: $repo_path"
+        log "WARN" "非 GIT 项目: $repo_path"
         return 0
     fi
 
