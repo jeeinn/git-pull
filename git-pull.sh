@@ -206,8 +206,7 @@ process_git_repo() {
     return 0
 }
 
-# 检查系统命令是否存在
-# 检查命令是否存在
+# 检查所需命令是否存在
 check_commands() {
     local command_list=($1)
     local commands_not_found=""
@@ -238,6 +237,9 @@ main() {
     # 检查所需命令是否存在
     check_commands "awk date find git grep readlink"
 
+    # 记录开始时间
+    local start_time=$(date +"%s")
+
     if is_git_repo "$target_dir"; then
         log "SUCCESS" "开始处理当前目录..."
         process_git_repo "$target_dir"
@@ -251,6 +253,13 @@ main() {
         done
         log "SUCCESS" "程序执行结束"
     fi
+
+    # 记录结束时间
+    local end_time=$(date +"%s")
+
+    # 计算运行时间
+    local runtime=$((end_time - start_time))
+    log "INFO" "程序运行时间: $runtime 秒"
 }
 
 main "$@"
