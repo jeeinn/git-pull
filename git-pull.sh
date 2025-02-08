@@ -12,7 +12,8 @@ log() {
     local level=$1
     local message=$2
     local color
-    local ts=$(date +"%Y-%m-%d %H:%M:%S.%3N")
+    local ts
+    ts=$(date +"%Y-%m-%d %H:%M:%S.%3N")
 
     case $level in
         "INFO")    color=$COLOR_INFO ;;
@@ -28,7 +29,8 @@ log() {
 # 检查是否为 git 仓库
 is_git_repo() {
     local repo_path=$1
-    local original_dir=$(pwd)
+    local original_dir
+    original_dir=$(pwd)
 
     # 验证路径是否存在且为目录
     if [[ ! -d "$repo_path" ]]; then
@@ -44,11 +46,11 @@ is_git_repo() {
 
     # 检查是否在 git 工作树内，将标准输出和标准错误输出都重定向到 /dev/null
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        cd "$original_dir" >/dev/null
+        cd "$original_dir" || return 1
         return 1
     fi
 
-    cd "$original_dir" >/dev/null
+    cd "$original_dir" || return 1
     return 0
 }
 
@@ -62,8 +64,34 @@ rollback() {
     local target=$1
     log "INFO" "执行回滚到 $target"
     if ! git reset --hard "$target"; then
-        log "ERROR" "回滚操作失败！"
+        log "INFO" "回滚操作失败！"
         return 1
+    fi
+    log "INFO" "回滚成功"
+    return 0
+}
+
+# 恢复 stash
+restore_stash() {
+    local stash_ref=$1
+    local stash_name=$2
+
+    log "INFO" "尝试应用 $stash_ref"
+    if ! git stash apply --index "$stash_ref"; then
+        log "ERROR" "自动应用失败，保留 stash"
+        log "WARN" ""
+        log "WARN" "检测到已保存的 stash 有可恢复内容"
+        log "WARN" "   - 查看: git stash list"
+        log "WARN" "   - 查看差异: git diff $stash_ref"
+        log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
+        return 1
+    fi
+
+    log "INFO" "成功应用 stash"
+    if git stash drop "$stash_ref"; then
+        log "INFO" "已清理临时 stash"
+    else
+        log "WARN" "Stash 清理失败（可安全忽略）"
     fi
     return 0
 }
@@ -71,12 +99,13 @@ rollback() {
 # 处理 git 仓库
 process_git_repo() {
     local repo_path=$1
-    local original_dir=$(pwd)
+    local original_dir
+    original_dir=$(pwd)
 
     # 检查是否为 git 仓库
     if ! is_git_repo "$repo_path"; then
         log "WARN" "非 GIT 项目: $repo_path"
-        return 0
+        return 1
     fi
 
     log "INFO" "===================================="
@@ -86,7 +115,8 @@ process_git_repo() {
         return 1
     }
 
-    local original_branch=$(git symbolic-ref --short HEAD)
+    local original_branch
+    original_branch=$(git symbolic-ref --short HEAD)
     local branches=()
     
     # 替换 mapfile 为兼容性更强的 while 循环
@@ -102,8 +132,10 @@ process_git_repo() {
             continue
         fi
 
-        local current_commit=$(git rev-parse HEAD)
-        local stash_name="auto-stash-${branch}-$(date +%s)"
+        local current_commit
+        current_commit=$(git rev-parse HEAD)
+        local stash_name
+        stash_name="auto-stash-${branch}-$(date +%s)"
         local stash_ref=""
 
         # 增强型 stash 处理（包含未跟踪文件）
@@ -134,64 +166,42 @@ process_git_repo() {
 
         # 执行更新（带冲突保护）
         log "INFO" "开始执行 git pull"
-        if git pull; then
-            log "SUCCESS" "本地分支更新成功: $branch"
-        else
+        if ! git pull; then
             log "ERROR" "本地分支更新失败，执行回滚"
+
             if ! rollback "$current_commit"; then
                 log "WARN" ""
                 log "WARN" "以下是一些可能的处理方法："
                 log "WARN" "1. 手动重置工作区 git reset --hard HEAD"
                 log "WARN" "2. 查看项目 stash 列表"
                 log "WARN" "   - 查看：git stash list"
-                log "WARN" "   - 查看差异：git diff $stash_ref"
-                log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
                 cd "$original_dir" || return 1  # 确保回到原始目录
                 return 1
             fi
-            log "ERROR" "执行 git pull 失败！（不再处理其他分支）"
+            log "ERROR" "执行 git pull 失败！"
             log "WARN" "${repo_path} (${branch})"
             log "WARN" "可能是无法连接到远程仓库或远程无此本地分支"
-            log "WARN" "以下是一些可能的处理方法："
-            log "WARN" "1. 检查网络连接是否正常，可以尝试 ping 远程仓库的域名。例如：ping github.com"
-            log "WARN" "2. 检查远程仓库的 URL 是否正确，可以使用以下命令查看并修改："
-            log "WARN" "   - 查看: git remote -v"
-            log "WARN" "   - 修改: git remote set-url origin <new-url>"
-            log "WARN" "3. 确认远程仓库是否存在此分支，可以在远程仓库的网页界面查看分支列表"
-            log "WARN" "4. 如果是权限问题，检查你的 SSH 密钥或用户名密码是否正确"
-            log "WARN" "5. 尝试手动拉取: git fetch，然后使用 git merge 合并分支"
 
             if [ -n "$stash_ref" ]; then
-                log "WARN" ""
-                log "WARN" "检测到已保存的 stash 有可恢复内容"
-                log "WARN" "   - 查看: git stash list"
-                log "WARN" "   - 查看差异: git diff $stash_ref"
-                log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
+                # 安全应用 stash（使用引用格式）
+                restore_stash "$stash_ref" "$stash_name"
+                
+                log "WARN" "当前分支${branch}，不再处理其他分支"
+                # git checkout "$original_branch"
+                cd "$original_dir" || return 1  # 确保回到原始目录
+                return 1
+            else
+                continue
             fi
-
-            git checkout "$original_branch"
-            cd "$original_dir" || return 1  # 确保回到原始目录
-            return 1
         fi
+
+        log "SUCCESS" "本地分支更新成功: $branch"
 
         # 安全应用 stash（使用引用格式）
         if [ -n "$stash_ref" ]; then
-            log "INFO" "尝试应用 $stash_ref"
-            if git stash apply --index "$stash_ref"; then
-                log "SUCCESS" "成功应用 stash"
-                if git stash drop "$stash_ref"; then
-                    log "INFO" "已清理临时 stash"
-                else
-                    log "WARN" "Stash 清理失败（可安全忽略）"
-                fi
-            else
-                log "ERROR" "自动应用失败，保留 stash"
-                log "WARN" ""
-                log "WARN" "检测到已保存的 stash 有可恢复内容"
-                log "WARN" "   - 查看: git stash list"
-                log "WARN" "   - 查看差异: git diff $stash_ref"
-                log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
-
+            if ! restore_stash "$stash_ref" "$stash_name"; then
+                log "WARN" "当前分支${branch}，不再处理其他分支"
+                # git checkout "$original_branch"
                 cd "$original_dir" || return 1  # 确保回到原始目录
                 return 1
             fi
@@ -206,7 +216,7 @@ process_git_repo() {
 
 # 检查所需命令是否存在
 check_commands() {
-    local command_list=($1)
+    local command_list=("$1")
     local commands_not_found=""
 
     # 遍历命令列表
@@ -233,10 +243,11 @@ main() {
     [ -n "$input_dir" ] && target_dir=$(readlink -f "$input_dir")
 
     # 检查所需命令是否存在
-    check_commands "awk date find git grep readlink"
+    check_commands awk date find git grep readlink
 
     # 记录开始时间
-    local start_time=$(date +"%s")
+    local start_time
+    start_time=$(date +"%s")
 
     if is_git_repo "$target_dir"; then
         log "SUCCESS" "开始处理当前目录..."
@@ -253,7 +264,8 @@ main() {
     fi
 
     # 记录结束时间
-    local end_time=$(date +"%s")
+    local end_time
+    end_time=$(date +"%s")
 
     # 计算运行时间
     local runtime=$((end_time - start_time))
