@@ -69,6 +69,7 @@ process_git_repo() {
         return 0
     fi
 
+    log "INFO" "===================================="
     log "INFO" "处理仓库: $(basename "$repo_path")"
     cd "$repo_path" || {
         log "ERROR" "目录访问失败: $repo_path"
@@ -94,7 +95,7 @@ process_git_repo() {
 
         # 增强型 stash 处理（包含未跟踪文件）
         if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            log "WARN" "检测到未提交修改或未跟踪文件，创建安全 stash"
+            log "WARN" "检测到未提交修改或未跟踪文件，开始创建安全 stash"
 
             # 创建并存储 stash
             local stash_hash=$(git stash create --include-untracked "$stash_name")
@@ -131,9 +132,25 @@ process_git_repo() {
             log "ERROR" "更新失败，执行回滚"
             if ! rollback "$current_commit"; then
                 log "ERROR" "回滚失败！请立即手动处理"
+                log "WARN" "以下是一些可能的处理方法："
+                log "WARN" "1. 手动重置工作区 git reset --hard HEAD"
+                log "WARN" "2. 查看项目 stash 列表"
+                log "WARN" "   - 查看：git stash list"
+                log "WARN" "   - 查看差异：git diff $stash_ref"
+                log "WARN" "   - 重新应用 $stash_name ：git stash apply $stash_ref"
                 cd "$original_dir" || return 1  # 确保回到原始目录
                 return 1
             fi
+            log "ERROR" "git pull 失败 $repo_path，可能是无法连接到远程仓库或远程无此本地分支。"
+            log "WARN" "以下是一些可能的处理方法："
+            log "WARN" "1. 检查网络连接是否正常，可以尝试 ping 远程仓库的域名。例如：ping github.com"
+            log "WARN" "2. 检查远程仓库的 URL 是否正确，可以使用以下命令查看并修改："
+            log "WARN" "   - 查看：git remote -v"
+            log "WARN" "   - 修改：git remote set-url origin <new-url>"
+            log "WARN" "3. 确认远程仓库是否存在此分支，可以在远程仓库的网页界面查看分支列表。"
+            log "WARN" "4. 如果是权限问题，检查你的 SSH 密钥或用户名密码是否正确。"
+            log "WARN" "5. 尝试手动拉取：git fetch，然后使用 git merge 合并分支。"
+
             git checkout "$original_branch"
             cd "$original_dir" || return 1  # 确保回到原始目录
             return 1
@@ -175,12 +192,14 @@ main() {
     if is_git_repo "$target_dir"; then
         process_git_repo "$target_dir"
     else
-        log "INFO" "扫描子目录..."
+        log "INFO" "开始扫描一级子目录..."
+        # 查找目标目录下的一级子目录
         find "$target_dir" -maxdepth 1 -type d | while read -r subdir; do
             # 跳过目标目录本身
             [ "$subdir" = "$target_dir" ] && continue
             process_git_repo "$subdir"
         done
+        log "INFO" "处理完成"
     fi
 }
 
