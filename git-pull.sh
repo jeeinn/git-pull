@@ -106,30 +106,24 @@ process_git_repo() {
         # 增强型 stash 处理（包含未跟踪文件）
         if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
             log "WARN" "检测到未提交修改或未跟踪文件"
-            log "INFO" "开始创建安全 stash"
+            log "INFO" "尝试自动解决，开始安全创建 stash"
 
             # 创建并存储 stash
-            local stash_hash=$(git stash create --include-untracked "$stash_name")
-            if [ -z "$stash_hash" ]; then
-                log "ERROR" "stash 创建失败，跳过分支处理"
-                continue
-            fi
-
-            if ! git stash store -m "$stash_name" "$stash_hash"; then
-                log "ERROR" "stash 存储失败，跳过分支处理"
+            if ! git stash push --include-untracked --message "$stash_name"; then
+                log "WARN" "Stash 存储失败，跳过分支处理"
                 continue
             fi
 
             # 获取存储的 stash 引用
-            stash_ref=$(git stash list | grep -m1 ": ${stash_name}" | awk -F': ' '{print $1}')
+            stash_ref=$(git stash list | grep -m1 ": On ${branch}: ${stash_name}" | awk -F': ' '{print $1}')
             if [ -z "$stash_ref" ]; then
-                log "ERROR" "无法定位 stash 引用，跳过分支处理"
+                log "WARN" "无法定位 stash 引用，跳过分支处理（可安全忽略）"
                 continue
             fi
 
             # 安全重置工作区
             if ! git reset --hard HEAD; then
-                log "ERROR" "工作区重置失败，跳过分支处理"
+                log "WARN" "工作区重置失败，跳过分支处理（可安全忽略）"
                 continue
             fi
             log "INFO" "Stash 保存成功 (ref: $stash_ref)"
@@ -152,7 +146,7 @@ process_git_repo() {
                 cd "$original_dir" || return 1  # 确保回到原始目录
                 return 1
             fi
-            log "ERROR" "git pull 失败！$repo_path（$branch）"
+            log "ERROR" "执行 git pull 失败！$repo_path（$branch）"
             log "WARN" "可能是无法连接到远程仓库或远程无此本地分支"
             log "WARN" "以下是一些可能的处理方法："
             log "WARN" "1. 检查网络连接是否正常，可以尝试 ping 远程仓库的域名。例如：ping github.com"
@@ -184,7 +178,7 @@ process_git_repo() {
                 if git stash drop "$stash_ref"; then
                     log "INFO" "已清理临时 stash"
                 else
-                    log "WARN" "stash 清理失败（可安全忽略）"
+                    log "WARN" "Stash 清理失败（可安全忽略）"
                 fi
             else
                 log "ERROR" "自动应用失败，保留 stash"
