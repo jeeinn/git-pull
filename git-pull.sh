@@ -80,7 +80,7 @@ process_git_repo() {
     fi
 
     log "INFO" "===================================="
-    log "SUCCESS" "处理本地仓库: $(basename "$repo_path")"
+    log "SUCCESS" "开始处理本地仓库: $(basename "$repo_path")"
     cd "$repo_path" || {
         log "ERROR" "目录访问失败: $repo_path"
         return 1
@@ -88,14 +88,17 @@ process_git_repo() {
 
     local original_branch=$(git symbolic-ref --short HEAD)
     local branches=()
-    # 使用 mapfile 读取本地分支到数组中
-    mapfile -t branches < <(get_local_branches)
+    
+    # 替换 mapfile 为兼容性更强的 while 循环
+    while IFS= read -r branch; do
+        branches+=("$branch")
+    done < <(get_local_branches)
 
     for branch in "${branches[@]}"; do
-        log "SUCCESS" "处理本地分支: $branch"
-        # 切换分支，如果失败则记录错误并继续处理下一个分支
+        log "INFO" "开始处理本地分支: ${branch}"
+        # 切换分支，如果失败继续处理下一个分支
         if ! git checkout "$branch"; then
-            log "ERROR" "分支切换失败: $branch"
+            log "ERROR" "分支切换失败: ${branch}"
             continue
         fi
 
@@ -146,7 +149,8 @@ process_git_repo() {
                 cd "$original_dir" || return 1  # 确保回到原始目录
                 return 1
             fi
-            log "ERROR" "执行 git pull 失败！$repo_path（$branch）"
+            log "ERROR" "执行 git pull 失败！（不再处理其他分支）"
+            log "WARN" "${repo_path} (${branch})"
             log "WARN" "可能是无法连接到远程仓库或远程无此本地分支"
             log "WARN" "以下是一些可能的处理方法："
             log "WARN" "1. 检查网络连接是否正常，可以尝试 ping 远程仓库的域名。例如：ping github.com"
@@ -174,7 +178,7 @@ process_git_repo() {
         if [ -n "$stash_ref" ]; then
             log "INFO" "尝试应用 $stash_ref"
             if git stash apply --index "$stash_ref"; then
-                log "INFO" "成功应用 stash"
+                log "SUCCESS" "成功应用 stash"
                 if git stash drop "$stash_ref"; then
                     log "INFO" "已清理临时 stash"
                 else
