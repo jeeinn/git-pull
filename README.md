@@ -17,7 +17,7 @@ chmod +x git-pull.sh
 所以使用 bash 脚本重新编写了逻辑，添加了自动拉取分支时通过使用 stash 来最大程度避免冲突。
 
 * 测试情况
-1. [x] 已在 Windows11 的 Git Bash 环境测试通过
+1. [x] 已在 Windows11 的 Git Bash 环境测试通过 `git version 2.47.1.windows.1`
 2. [ ] macOS 
 3. [ ] Linux
 
