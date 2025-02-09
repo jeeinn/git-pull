@@ -45,7 +45,7 @@ is_git_repo() {
     fi
 
     # 检查是否在 git 工作树内，将标准输出和标准错误输出都重定向到 /dev/null
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    if ! git rev-parse --is-inside-work-tree &> /dev/null; then
         cd "$original_dir" || return 1
         return 1
     fi
@@ -64,7 +64,14 @@ rollback() {
     local target=$1
     log "INFO" "执行回滚到 $target"
     if ! git reset --hard "$target"; then
-        log "INFO" "回滚操作失败！"
+        # 回滚失败应为极小概率
+        log "ERROR" "回滚操作失败！"
+        log "WARN" ""
+        log "WARN" "以下是一些可能的处理方法："
+        log "WARN" "1. 手动重置工作区 git reset --hard HEAD"
+        log "WARN" "2. 恢复 stash "
+        log "WARN" "   - 查看：git stash list"
+        log "WARN" "   - 应用：git stash apply stash{0}"
         return 1
     fi
     log "INFO" "回滚成功"
@@ -118,11 +125,27 @@ process_git_repo() {
     local original_branch
     original_branch=$(git symbolic-ref --short HEAD)
     local branches=()
-    
-    # 替换 mapfile 为兼容性更强的 while 循环
+    local original_branch_found=false
+
+    # 重构分支排序逻辑：原始分支排首位
     while IFS= read -r branch; do
-        branches+=("$branch")
+        if [[ "$branch" == "$original_branch" ]]; then
+            branches=("$branch" "${branches[@]}") # 插入数组开头
+            original_branch_found=true
+        else
+            branches+=("$branch")
+        fi
     done < <(get_local_branches)
+
+    # 若原始分支未在分支列表中（异常情况）
+    if ! $original_branch_found; then
+        log "WARN" "原始分支 $original_branch 未在本地分支列表中"
+        branches=("$original_branch" "${branches[@]}")
+    fi
+
+    # 状态追踪变量
+    local global_stash_ref=""  # 用于记录原始分支的stash ref
+    local global_stash_name="" # 用于记录原始分支的stash name
 
     for branch in "${branches[@]}"; do
         log "INFO" "开始处理本地分支: ${branch}"
@@ -134,81 +157,72 @@ process_git_repo() {
 
         local current_commit
         current_commit=$(git rev-parse HEAD)
-        local stash_name
-        stash_name="auto-stash-${branch}-$(date +%s)"
-        local stash_ref=""
 
-        # 增强型 stash 处理（包含未跟踪文件）
-        if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            log "WARN" "检测到未提交修改或未跟踪文件"
-            log "INFO" "尝试自动解决，开始安全创建 stash"
+        # 已确保首次进入原始分支且仅在原始分支处理全局 stash （包含未跟踪文件）
+        # 后续分支将基于干净工作区
+        if [[ "$branch" == "$original_branch" ]]; then
+            if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+                log "WARN" "[当前仓库] 检测到未提交修改或未跟踪文件"
+                log "INFO" "尝试自动解决，开始安全创建全局 stash"
 
-            # 创建并存储 stash
-            if ! git stash push --include-untracked --message "$stash_name"; then
-                log "WARN" "Stash 存储失败，跳过分支处理"
-                continue
+                # 创建并存储 stash
+                global_stash_name="GLOBAL_STASH_${original_branch}_$(date +%s)"
+                if ! git stash push --include-untracked --message "$global_stash_name"; then
+                    log "ERROR" "全局 stash 创建失败，不再处理本仓库"
+                    cd "$original_dir" || return 1 # 确保回到原始目录
+                    return 1
+                fi
+
+                # 获取存储的 stash 引用
+                global_stash_ref=$(git stash list | grep -m1 "$global_stash_name" | awk -F': ' '{print $1}')
+                if [ -z "$global_stash_ref" ]; then
+                    log "ERROR" "无法定位 stash 引用，不再处理本仓库"
+                    cd "$original_dir" || return 1 # 确保回到原始目录
+                    return 1
+                fi
+                log "INFO" "全局 stash 创建成功 ${global_stash_name} (ref: ${global_stash_ref})"
             fi
-
-            # 获取存储的 stash 引用
-            stash_ref=$(git stash list | grep -m1 ": On ${branch}: ${stash_name}" | awk -F': ' '{print $1}')
-            if [ -z "$stash_ref" ]; then
-                log "WARN" "无法定位 stash 引用，跳过分支处理（可安全忽略）"
-                continue
-            fi
-
-            # 安全重置工作区
-            if ! git reset --hard HEAD; then
-                log "WARN" "工作区重置失败，跳过分支处理（可安全忽略）"
-                continue
-            fi
-            log "INFO" "Stash 保存成功 (ref: $stash_ref)"
         fi
 
-        # 执行更新（带冲突保护）
+        # 安全重置工作区
+        if ! git reset --hard HEAD; then
+            log "WARN" "工作区重置失败，跳过分支处理（可安全忽略）"
+            continue
+        fi
+
         log "INFO" "开始执行 git pull"
         if ! git pull; then
-            log "ERROR" "本地分支更新失败，执行回滚"
-
+            log "INFO" "本地分支更新失败，执行回滚"
             if ! rollback "$current_commit"; then
-                log "WARN" ""
-                log "WARN" "以下是一些可能的处理方法："
-                log "WARN" "1. 手动重置工作区 git reset --hard HEAD"
-                log "WARN" "2. 查看项目 stash 列表"
-                log "WARN" "   - 查看：git stash list"
-                cd "$original_dir" || return 1  # 确保回到原始目录
+                log "ERROR" "回滚失败，不再处理本仓库"
+                cd "$original_dir" || return 1 # 确保回到原始目录
                 return 1
             fi
             log "ERROR" "执行 git pull 失败！"
-            log "WARN" "${repo_path} (${branch})"
-            log "WARN" "可能是无法连接到远程仓库或远程无此本地分支"
-
-            if [ -n "$stash_ref" ]; then
-                # 安全应用 stash（使用引用格式）
-                restore_stash "$stash_ref" "$stash_name"
-                
-                log "WARN" "当前分支${branch}，不再处理其他分支"
-                # git checkout "$original_branch"
-                cd "$original_dir" || return 1  # 确保回到原始目录
-                return 1
-            else
-                continue
-            fi
-        fi
-
-        log "SUCCESS" "本地分支更新成功: $branch"
-
-        # 安全应用 stash（使用引用格式）
-        if [ -n "$stash_ref" ]; then
-            if ! restore_stash "$stash_ref" "$stash_name"; then
-                log "WARN" "当前分支${branch}，不再处理其他分支"
-                # git checkout "$original_branch"
-                cd "$original_dir" || return 1  # 确保回到原始目录
-                return 1
-            fi
+            log "WARN" "请注意检查上述失败原因"
+            log "INFO" "Repo: ${repo_path} (Branch: ${branch})"
+        else
+            log "SUCCESS" "本地分支更新成功: $branch"
         fi
     done
 
-    git checkout "$original_branch"
+    # 返回原始分支并判断 stash 恢复
+    if ! git checkout "$original_branch"; then
+        log "ERROR" "返回原始分支失败: ${original_branch}"
+        if [ -n "$global_stash_ref" ]; then
+            log "WARN" "可通过以下命令手动恢复：git stash apply ${global_stash_ref} （${global_stash_name})"
+        fi
+    else
+        log "INFO" "返回原始分支"
+
+        # 安全应用 stash（使用引用格式）
+        if [ -n "$global_stash_ref" ]; then
+            if ! restore_stash "$global_stash_ref" "$global_stash_name"; then
+                log "WARN" "当前分支${original_branch}"
+            fi
+        fi
+    fi
+
     cd "$original_dir" || return 1
     log "SUCCESS" "仓库处理完成: $repo_path"
     return 0
